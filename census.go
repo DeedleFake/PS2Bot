@@ -37,7 +37,41 @@ func (s Server) String() string {
 	panic("Unknown server: " + s)
 }
 
+type Faction string
+
+func (f Faction) String() string {
+	switch f {
+	case "1":
+		return "Vanu Sovriegnty"
+	case "2":
+		return "New Conglomerate"
+	case "3":
+		return "Terran Republic"
+	}
+
+	panic("Unknown faction: " + f)
+}
+
 type CensusChar struct {
+	Name      string
+	Created   time.Time
+	LastLogin time.Time
+	Played    time.Duration
+	Logins    int
+	Rank      int
+	Faction   Faction
+	Server    Server
+	Outfit    string
+	Score     int
+	Captures  int
+	Defenses  int
+	Medals    int
+	Ribbons   int
+	Certs     int
+	Kills     int
+	Assists   int
+	Deaths    int
+	KD        float64
 }
 
 func GenReport(char string) (*CensusChar, error) {
@@ -51,17 +85,44 @@ func GenReport(char string) (*CensusChar, error) {
 
 	d := json.NewDecoder(rsp.Body)
 
-	var cc struct {
+	var rawChar struct {
 		CharacterList []struct {
+			Name struct {
+				First string `json:"first"`
+			} `json:"name"`
+			Faction Faction `json:"faction_id"`
+			Times   struct {
+				Creation   string `json:"creation"`
+				LastLogin  string `json:"last_login"`
+				LoginCount string `json:"login_count"`
+				MinPlayed  string `json:"minutes_played"`
+			} `json:"times"`
+			BattleRank struct {
+				Value string `json:"value"`
+			} `json:"battle_rank"`
 		} `json:"character_list"`
 		Returned int `json:"returned"`
+		Stats    struct {
+			History []map[string]interface{} `json:"stat_history"`
+		} `json:"stats"`
 	}
 
-	err = d.Decode(&cc)
+	findStat := func(stat string) int {
+		for _, v := range rawChar.Stats.History {
+			if v["stat_name"] == stat {
+				val, _ := strconv.ParseInt(v["all_time"].(string), 10, 0)
+				return int(val)
+			}
+		}
+
+		panic("Stat not found: " + stat)
+	}
+
+	err = d.Decode(&rawChar)
 	if err != nil {
 		return nil, err
 	}
-	if cc.Returned == 0 {
+	if rawChar.Returned == 0 {
 		return nil, NoSuchCharacterErr
 	}
 
