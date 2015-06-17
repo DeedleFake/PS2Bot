@@ -8,8 +8,6 @@ import (
 )
 
 const (
-	Username  = ""
-	Password  = ""
 	UserAgent = "Planetside 2 Stats Poster"
 
 	URLDasanFall = "[[dasanfall]](http://stats.dasanfall.com/ps2/player/%s)"
@@ -51,6 +49,7 @@ var (
 )
 
 func init() {
+	// Create a .go file in the root that defines constants called Username and Password.
 	ls, err := geddit.NewLoginSession(Username, Password, UserAgent)
 	if err != nil {
 		log.Printf("Failed to login to Reddit: %v", err)
