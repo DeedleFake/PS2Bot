@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 const (
@@ -52,26 +54,78 @@ func (f Faction) String() string {
 	panic("Unknown faction: " + f)
 }
 
+type Outfit struct {
+	Alias   string
+	Name    string
+	Members int
+}
+
+func (o *Outfit) String() string {
+	if o == nil {
+		return "None"
+	}
+
+	return fmt.Sprintf("[%v] %v (%v member%v)",
+		o.Alias,
+		o.Name,
+		o.Members,
+		plural(o.Members, "s"),
+	)
+}
+
 type CensusChar struct {
-	Name      string
-	Created   time.Time
-	LastLogin time.Time
-	Played    time.Duration
-	Logins    int
-	Rank      int
-	Faction   Faction
-	Server    Server
-	Outfit    string
-	Score     int
-	Captures  int
-	Defenses  int
-	Medals    int
-	Ribbons   int
-	Certs     int
-	Kills     int
-	Assists   int
-	Deaths    int
-	KD        float64
+	Name                        string
+	Created                     time.Time
+	LastLogin                   time.Time
+	Played                      time.Duration
+	Logins                      int
+	Rank                        int
+	Faction                     Faction
+	Server                      Server
+	Outfit                      *Outfit
+	Score, Captures, Defenses   int
+	Medals, Ribbons, Certs      int
+	Kills /*, Assists*/, Deaths int
+	KD                          float64
+}
+
+type rawChar struct {
+	CharList []struct {
+		Name struct {
+			First string `json:"first"`
+		} `json:"name"`
+		Faction Faction `json:"faction_id"`
+		Times   struct {
+			Creation   string `json:"creation"`
+			LastLogin  string `json:"last_login"`
+			LoginCount string `json:"login_count"`
+			MinPlayed  string `json:"minutes_played"`
+		} `json:"times"`
+		BattleRank struct {
+			Value string `json:"value"`
+		} `json:"battle_rank"`
+		Outfit *struct {
+			Alias   string `json:"alias"`
+			Name    string `json:"name"`
+			Members string `json:"member_count"`
+		} `json:"outfit_member,omitempty"`
+		Stats struct {
+			History []map[string]interface{} `json:"stat_history"`
+		} `json:"stats"`
+		WorldID Server `json:"world_id"`
+	} `json:"character_list"`
+	Returned int `json:"returned"`
+}
+
+func (rc *rawChar) findStat(stat string) int {
+	for _, v := range rc.CharList[0].Stats.History {
+		if v["stat_name"] == stat {
+			val, _ := strconv.ParseInt(v["all_time"].(string), 10, 0)
+			return int(val)
+		}
+	}
+
+	panic("Stat not found: " + stat)
 }
 
 func GenReport(char string) (*CensusChar, error) {
@@ -85,46 +139,52 @@ func GenReport(char string) (*CensusChar, error) {
 
 	d := json.NewDecoder(rsp.Body)
 
-	var rawChar struct {
-		CharacterList []struct {
-			Name struct {
-				First string `json:"first"`
-			} `json:"name"`
-			Faction Faction `json:"faction_id"`
-			Times   struct {
-				Creation   string `json:"creation"`
-				LastLogin  string `json:"last_login"`
-				LoginCount string `json:"login_count"`
-				MinPlayed  string `json:"minutes_played"`
-			} `json:"times"`
-			BattleRank struct {
-				Value string `json:"value"`
-			} `json:"battle_rank"`
-		} `json:"character_list"`
-		Returned int `json:"returned"`
-		Stats    struct {
-			History []map[string]interface{} `json:"stat_history"`
-		} `json:"stats"`
-	}
-
-	findStat := func(stat string) int {
-		for _, v := range rawChar.Stats.History {
-			if v["stat_name"] == stat {
-				val, _ := strconv.ParseInt(v["all_time"].(string), 10, 0)
-				return int(val)
-			}
-		}
-
-		panic("Stat not found: " + stat)
-	}
-
-	err = d.Decode(&rawChar)
+	var rc rawChar
+	err = d.Decode(&rc)
 	if err != nil {
 		return nil, err
 	}
-	if rawChar.Returned == 0 {
+	if rc.Returned == 0 {
 		return nil, NoSuchCharacterErr
 	}
 
-	return nil, NoSuchCharacterErr
+	created, _ := strconv.ParseInt(rc.CharList[0].Times.Creation, 10, 64)
+	lastLogin, _ := strconv.ParseInt(rc.CharList[0].Times.LastLogin, 10, 64)
+	played, _ := strconv.ParseInt(rc.CharList[0].Times.MinPlayed, 10, 64)
+	logins, _ := strconv.ParseInt(rc.CharList[0].Times.LoginCount, 10, 0)
+	rank, _ := strconv.ParseInt(rc.CharList[0].BattleRank.Value, 10, 0)
+
+	var outfit *Outfit
+	if rc.CharList[0].Outfit != nil {
+		outfitMembers, _ := strconv.ParseInt(rc.CharList[0].Outfit.Members, 10, 0)
+		outfit = &Outfit{
+			Alias:   rc.CharList[0].Outfit.Alias,
+			Name:    rc.CharList[0].Outfit.Name,
+			Members: int(outfitMembers),
+		}
+	}
+
+	kills := rc.findStat("kills")
+	deaths := rc.findStat("deaths")
+
+	return &CensusChar{
+		Name:      rc.CharList[0].Name.First,
+		Created:   time.Unix(created, 0),
+		LastLogin: time.Unix(lastLogin, 0),
+		Played:    time.Duration(played) * time.Minute,
+		Logins:    int(logins),
+		Rank:      int(rank),
+		Faction:   rc.CharList[0].Faction,
+		Server:    rc.CharList[0].WorldID,
+		Outfit:    outfit,
+		Score:     rc.findStat("score"),
+		Captures:  rc.findStat("facility_capture"),
+		Defenses:  rc.findStat("facility_defend"),
+		Medals:    rc.findStat("medals"),
+		Ribbons:   rc.findStat("ribbons"),
+		Certs:     rc.findStat("certs"),
+		Kills:     kills,
+		Deaths:    deaths,
+		KD:        float64(kills) / float64(deaths),
+	}, nil
 }
